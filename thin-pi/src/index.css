@@ -1,0 +1,80 @@
+/*
+ * Copyright (c) 2026 Dexian India Technologies Private Limited.
+ * All rights reserved.
+ *
+ * This file is proprietary and confidential. Unauthorised copying,
+ * distribution or use of this file, via any medium, is strictly
+ * prohibited without the prior written permission of Dexian India
+ * Technologies Private Limited.
+ */
+
+@import "tailwindcss";
+
+@theme {
+  --color-industrial-950: #0a0e17;
+  --color-industrial-900: #0f1623;
+  --color-industrial-800: #1a2234;
+  --color-industrial-700: #243049;
+  --color-industrial-600: #334155;
+  --color-industrial-500: #4a5568;
+  --color-industrial-400: #718096;
+  --color-industrial-300: #a0aec0;
+  --color-industrial-200: #cbd5e0;
+  --color-industrial-100: #e2e8f0;
+
+  --color-opc-green: #10b981;
+  --color-opc-yellow: #f59e0b;
+  --color-opc-red: #ef4444;
+  --color-opc-blue: #3b82f6;
+  --color-accent: #06b6d4;
+  --color-accent-hover: #22d3ee;
+}
+
+/* ── Global Resets ──────────────────────────────── */
+* {
+  box-sizing: border-box;
+}
+
+body {
+  font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* ── Industrial Scrollbars ──────────────────────── */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: var(--color-industrial-900);
+}
+::-webkit-scrollbar-thumb {
+  background: var(--color-industrial-600);
+  border-radius: 3px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: var(--color-industrial-500);
+}
+
+/* ── uPlot Overrides for Dark Theme ─────────────── */
+.u-wrap {
+  background: transparent !important;
+}
+.u-legend {
+  font-size: 11px !important;
+  color: #a0aec0 !important;
+}
+.u-legend .u-series > * {
+  padding: 2px 4px !important;
+}
+.u-select {
+  background: rgba(6, 182, 212, 0.12) !important;
+}
+
+/* ── Input Styles ───────────────────────────────── */
+input, textarea {
+  font-family: inherit;
+}
+input:focus, textarea:focus {
+  outline: none;
+}

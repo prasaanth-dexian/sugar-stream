@@ -161,3 +161,10 @@ __pycache__
 # Generated Compose credentials
 /installer/compose/.env
 /.env
+
+# THIN PI collector (Rust/Tauri + React)
+/thin-pi/node_modules/
+/thin-pi/dist/
+/thin-pi/src-tauri/target/
+/thin-pi/src-tauri/gen/
+/thin-pi/.kilo/

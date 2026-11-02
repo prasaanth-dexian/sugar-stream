@@ -1270,6 +1270,10 @@
                     <useMavenDefaultExcludes>true</useMavenDefaultExcludes>
                     <consoleOutput>true</consoleOutput>
                     <excludes>
+                        <!-- THIN PI collector: Dexian proprietary code, not an ASF
+                             contribution. It carries its own copyright header and must
+                             not be stamped with the ASF licence header. -->
+                        <exclude>thin-pi/**</exclude>
                         <!-- Git related files -->
                         <exclude>**/.git/**</exclude>
                         <exclude>**/.gitignore</exclude>
