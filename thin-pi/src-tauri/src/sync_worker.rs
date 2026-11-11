@@ -209,8 +209,7 @@ async fn run_sync_cycle(
 /// Execute an auto-prune cycle: delete old synced rows + vacuum.
 async fn run_prune_cycle(db: &Arc<DbPool>, max_age_days: i64) {
     let db_clone = db.clone();
-    let result =
-        tokio::task::spawn_blocking(move || db_clone.prune_old_synced(max_age_days)).await;
+    let result = tokio::task::spawn_blocking(move || db_clone.prune_old_synced(max_age_days)).await;
 
     match result {
         Ok(Ok(deleted)) => {

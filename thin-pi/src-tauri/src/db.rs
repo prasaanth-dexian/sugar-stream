@@ -107,12 +107,7 @@ impl DbPool {
     }
 
     /// Register a tag in the tags table. Returns the tag_id.
-    pub fn register_tag(
-        &self,
-        node_id: &str,
-        tag_name: &str,
-        eng_unit: &str,
-    ) -> SqlResult<i64> {
+    pub fn register_tag(&self, node_id: &str, tag_name: &str, eng_unit: &str) -> SqlResult<i64> {
         let conn = self.writer.lock();
 
         conn.execute(
@@ -235,7 +230,10 @@ impl DbPool {
         }
 
         // Build aligned output
-        let timestamps: Vec<f64> = all_timestamps.iter().map(|&ts| ts as f64 / 1000.0).collect();
+        let timestamps: Vec<f64> = all_timestamps
+            .iter()
+            .map(|&ts| ts as f64 / 1000.0)
+            .collect();
 
         let series: Vec<TrendSeries> = tag_ids
             .iter()
@@ -320,9 +318,8 @@ impl DbPool {
     pub fn get_all_tags(&self) -> SqlResult<Vec<(i64, String, String, String)>> {
         let conn = self.reader.lock();
 
-        let mut stmt = conn.prepare(
-            "SELECT tag_id, node_id, tag_name, eng_unit FROM tags WHERE is_active = 1",
-        )?;
+        let mut stmt = conn
+            .prepare("SELECT tag_id, node_id, tag_name, eng_unit FROM tags WHERE is_active = 1")?;
 
         let rows = stmt.query_map([], |row| {
             Ok((

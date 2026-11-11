@@ -333,8 +333,14 @@ impl OpcEngine {
 
                     for node_str in &subscribed_nodes {
                         let tag_id = *tag_id_map.entry(node_str.clone()).or_insert_with(|| {
-                            let clean_name = node_str.split(';').last().unwrap_or(node_str).replace("s=", "");
-                            db_clone.register_tag(node_str, &clean_name, "").unwrap_or(1)
+                            let clean_name = node_str
+                                .split(';')
+                                .last()
+                                .unwrap_or(node_str)
+                                .replace("s=", "");
+                            db_clone
+                                .register_tag(node_str, &clean_name, "")
+                                .unwrap_or(1)
                         });
 
                         let state = tag_state.entry(node_str.clone()).or_insert(0.0);
@@ -778,7 +784,11 @@ fn compute_prosys_node_value(node_id: &str, state: &mut f64, tick: u64) -> f64 {
         *state
     } else if node_id.contains("Square") {
         let period = 40.0;
-        *state = if (t % period) < (period / 2.0) { 100.0 } else { 0.0 };
+        *state = if (t % period) < (period / 2.0) {
+            100.0
+        } else {
+            0.0
+        };
         *state
     } else if node_id.contains("Triangle") {
         let period = 80.0;

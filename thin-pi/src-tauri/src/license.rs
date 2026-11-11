@@ -7,7 +7,7 @@
 // Technologies Private Limited.
 
 use crate::models::{LicensePayload, LicenseStatus};
-use ed25519_dalek::{Signature, Verifier, VerifyingKey, SigningKey, Signer};
+use ed25519_dalek::{Signature, Signer, SigningKey, Verifier, VerifyingKey};
 use sha2::{Digest, Sha256};
 use std::sync::OnceLock;
 
@@ -20,10 +20,8 @@ use std::sync::OnceLock;
 //
 // Generated deterministically from seed for reproducibility in dev/test.
 const DEV_PRIVATE_KEY_BYTES: [u8; 32] = [
-    0x9d, 0x61, 0xb1, 0x9d, 0xef, 0xfd, 0x5a, 0x60,
-    0xba, 0x84, 0x4a, 0xf4, 0x92, 0xec, 0x2c, 0xc4,
-    0x44, 0x49, 0xc5, 0x69, 0x7b, 0x32, 0x69, 0x19,
-    0x70, 0x3b, 0xac, 0x03, 0x1c, 0xae, 0x7f, 0x60,
+    0x9d, 0x61, 0xb1, 0x9d, 0xef, 0xfd, 0x5a, 0x60, 0xba, 0x84, 0x4a, 0xf4, 0x92, 0xec, 0x2c, 0xc4,
+    0x44, 0x49, 0xc5, 0x69, 0x7b, 0x32, 0x69, 0x19, 0x70, 0x3b, 0xac, 0x03, 0x1c, 0xae, 0x7f, 0x60,
 ];
 
 static DEV_PUBLIC_KEY: OnceLock<[u8; 32]> = OnceLock::new();
@@ -100,7 +98,9 @@ pub fn verify_license(license_b64: &str) -> Result<LicenseStatus, String> {
 
     verifying_key
         .verify(payload_bytes, &signature)
-        .map_err(|_| "License signature verification failed — invalid or tampered key".to_string())?;
+        .map_err(|_| {
+            "License signature verification failed — invalid or tampered key".to_string()
+        })?;
 
     // Step 4: Deserialize payload
     let payload: LicensePayload = serde_json::from_slice(payload_bytes)

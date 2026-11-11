@@ -61,10 +61,7 @@ async fn apply_license_key(
     *lic = status.clone();
 
     // Save license to disk for persistence across restarts
-    let db_path = format!(
-        "{}/../thinpi_license.key",
-        state.db.get_db_path()
-    );
+    let db_path = format!("{}/../thinpi_license.key", state.db.get_db_path());
     let _ = std::fs::write(&db_path, license_str.trim());
 
     log::info!(
@@ -116,7 +113,11 @@ async fn connect_opc_server(
 
     log::info!(
         "Connected to: {}",
-        if endpoint_url.is_empty() { "simulator" } else { &endpoint_url }
+        if endpoint_url.is_empty() {
+            "simulator"
+        } else {
+            &endpoint_url
+        }
     );
 
     Ok(true)
@@ -139,10 +140,7 @@ async fn discover_local_servers() -> Result<Vec<DiscoveredServer>, String> {
 
 /// Subscribe to a set of tags for trending.
 #[tauri::command]
-async fn subscribe_tags(
-    state: State<'_, AppState>,
-    tag_ids: Vec<String>,
-) -> Result<bool, String> {
+async fn subscribe_tags(state: State<'_, AppState>, tag_ids: Vec<String>) -> Result<bool, String> {
     let opc = state.opc.lock();
     opc.subscribe(tag_ids)
 }
@@ -163,10 +161,11 @@ async fn query_historical_trend(
     let db = state.db.clone();
 
     // Query raw data on blocking thread (READER connection)
-    let raw_trend = tokio::task::spawn_blocking(move || db.query_trend(&tag_ids, start_time, end_time))
-        .await
-        .map_err(|e| format!("Query task error: {}", e))?
-        .map_err(|e| format!("DB query error: {}", e))?;
+    let raw_trend =
+        tokio::task::spawn_blocking(move || db.query_trend(&tag_ids, start_time, end_time))
+            .await
+            .map_err(|e| format!("Query task error: {}", e))?
+            .map_err(|e| format!("DB query error: {}", e))?;
 
     // Apply LTTB downsampling if needed
     let target = viewport_width.unwrap_or(2000).max(100);
@@ -368,10 +367,7 @@ fn main() {
                 sync_shutdown: Mutex::new(None),
             });
 
-            log::info!(
-                "THIN PI System initialized — DB: {}",
-                db_path.display()
-            );
+            log::info!("THIN PI System initialized — DB: {}", db_path.display());
 
             Ok(())
         })

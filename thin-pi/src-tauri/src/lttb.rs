@@ -20,7 +20,11 @@
 /// Always preserves the first and last data points. Returns cloned data
 /// unchanged if the input length is already ≤ `target_points`.
 #[allow(dead_code)]
-pub fn downsample(timestamps: &[f64], values: &[f64], target_points: usize) -> (Vec<f64>, Vec<f64>) {
+pub fn downsample(
+    timestamps: &[f64],
+    values: &[f64],
+    target_points: usize,
+) -> (Vec<f64>, Vec<f64>) {
     let n = timestamps.len();
 
     if n <= target_points || target_points < 3 {
