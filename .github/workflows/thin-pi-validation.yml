@@ -1,0 +1,115 @@
+# Copyright (c) 2026 Dexian India Technologies Private Limited.
+# All rights reserved.
+#
+# This file is proprietary and confidential. Unauthorised copying,
+# distribution or use of this file, via any medium, is strictly
+# prohibited without the prior written permission of Dexian India
+# Technologies Private Limited.
+
+# Build and test the THIN PI Plant Collector (Rust/Tauri + React).
+#
+# Runs on Windows because the collector is a Windows service targeting
+# x86_64-pc-windows-msvc. It cannot be built or run on Linux: Tauri produces a
+# Windows desktop binary, and the OPC DA bridge is Windows COM.
+#
+# Only triggers on changes under thin-pi/, so StreamPipes-only pull requests do
+# not pay for a Windows runner (billed at a higher rate on private repos).
+
+name: THIN PI validation
+
+on:
+  pull_request:
+    paths:
+      - 'thin-pi/**'
+      - '.github/workflows/thin-pi-validation.yml'
+  push:
+    branches:
+      - dev
+    paths:
+      - 'thin-pi/**'
+
+permissions:
+  contents: read
+
+env:
+  # Matches the toolchain the existing build artefacts were produced with.
+  RUST_VERSION: '1.98.0'
+  NODE_VERSION: '24.x'
+
+jobs:
+  studio:
+    name: Studio front end
+    runs-on: windows-latest
+    defaults:
+      run:
+        working-directory: thin-pi
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7.0.1
+
+      - name: Set up Node
+        uses: actions/setup-node@v7
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+          cache-dependency-path: thin-pi/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build
+        run: npm run build
+
+  collector:
+    name: Collector (Rust)
+    runs-on: windows-latest
+    defaults:
+      run:
+        working-directory: thin-pi/src-tauri
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7.0.1
+
+      # rustup ships preinstalled on the GitHub Windows runners, so the toolchain
+      # is installed directly rather than through a third-party action. This
+      # repository is a fork of an ASF project and inherits the ASF GitHub Actions
+      # policy, which only permits allowlisted actions anywhere under .github/
+      # (enforced by asf-allowlist-check.yml). dtolnay/rust-toolchain is not on
+      # that allowlist.
+      - name: Set up Rust
+        shell: bash
+        run: |
+          rustup toolchain install "$RUST_VERSION" --profile minimal --no-self-update
+          rustup default "$RUST_VERSION"
+          rustup component add rustfmt clippy
+          rustup target add x86_64-pc-windows-msvc
+          rustc --version
+          cargo --version
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            thin-pi/src-tauri/target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('thin-pi/src-tauri/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-
+
+      - name: Formatting
+        run: cargo fmt --all --check
+
+      # Clippy must compile the crate, so this is a real gate, but it does not
+      # promote warnings to errors yet. The collector was imported as-is and has
+      # not been through a lint pass; -D warnings would fail the build on style
+      # findings before anyone has had a chance to look at them. Warnings are
+      # still printed in the job log. Add `-- -D warnings` once the tree is clean,
+      # with the Rust work in WBS 1.2.0.2.
+      - name: Clippy
+        run: cargo clippy --all-targets
+
+      - name: Tests
+        run: cargo test --all
+
+      - name: Build
+        run: cargo build --release

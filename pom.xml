@@ -1292,6 +1292,15 @@
                     <useMavenDefaultExcludes>true</useMavenDefaultExcludes>
                     <consoleOutput>true</consoleOutput>
                     <excludes>
+                        <!-- THIN PI collector: Dexian proprietary code, not an ASF
+                             contribution. It carries its own copyright header and must
+                             not be stamped with the ASF licence header. -->
+                        <exclude>thin-pi/**</exclude>
+                        <!-- The THIN PI CI workflow lives under .github/ because that is
+                             where GitHub requires workflows to be, but it is Dexian
+                             proprietary CI for proprietary code and carries the same
+                             Dexian header, so it is excluded for the same reason. -->
+                        <exclude>.github/workflows/thin-pi-validation.yml</exclude>
                         <!-- Git related files -->
                         <exclude>**/.git/**</exclude>
                         <exclude>**/.gitignore</exclude>
