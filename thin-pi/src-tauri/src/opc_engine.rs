@@ -861,67 +861,155 @@ fn generate_value(rng: &mut impl Rng, profile: &SimProfile, state: &mut f64, tic
 
 // ── Flush Worker ──────────────────────────────────────────────────────────────
 
-pub async fn flush_worker(mut rx: mpsc::Receiver<TelemetryRecord>, db: Arc<DbPool>) {
-    let mut buffer: Vec<TelemetryRecord> = Vec::with_capacity(512);
-    let flush_interval = Duration::from_millis(500);
-    let max_batch = 500;
+/// Readings held in memory while SQLite writes are failing. Beyond this the
+/// worker stops taking readings from the channel; the producers then block on
+/// `send`, which pauses acquisition. The pause is recorded as an acquisition gap.
+const MAX_PENDING: usize = 200_000;
 
-    log::info!("Flush worker started");
+/// Disk budget for the buffer database in MB (`THINPI_DISK_BUDGET_MB`, 0 = off).
+/// Stop well before the disk is full: marking readings as delivered is itself a
+/// write, so a 100%-full disk would deadlock (nothing can be acked, so nothing
+/// can be pruned). Size it to about half the free disk.
+fn disk_budget_mb() -> f64 {
+    std::env::var("THINPI_DISK_BUDGET_MB")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(20_480.0)
+}
+
+pub async fn flush_worker(mut rx: mpsc::Receiver<TelemetryRecord>, db: Arc<DbPool>) {
+    let mut buffer: Vec<TelemetryRecord> = Vec::with_capacity(4096);
+    let flush_interval = Duration::from_millis(250);
+    let max_batch = 5_000;
+    let budget_mb = disk_budget_mb();
+    let mut paused_since: Option<i64> = None;
+    let mut last_warn: Option<std::time::Instant> = None;
+
+    log::info!("Flush worker started (disk budget {budget_mb:.0} MB)");
 
     loop {
         let deadline = tokio::time::sleep(flush_interval);
         tokio::pin!(deadline);
 
-        loop {
-            tokio::select! {
-                biased;
+        if buffer.len() < MAX_PENDING {
+            loop {
+                tokio::select! {
+                    biased;
 
-                record = rx.recv() => {
-                    match record {
-                        Some(rec) => {
-                            buffer.push(rec);
-                            if buffer.len() >= max_batch {
-                                break;
+                    record = rx.recv() => {
+                        match record {
+                            Some(rec) => {
+                                buffer.push(rec);
+                                if buffer.len() >= max_batch && paused_since.is_none() {
+                                    break;
+                                }
+                                if buffer.len() >= MAX_PENDING {
+                                    break;
+                                }
                             }
-                        }
-                        None => {
-                            if !buffer.is_empty() {
-                                flush_batch(&db, &mut buffer).await;
+                            None => {
+                                if !buffer.is_empty() {
+                                    if let Err(e) = flush_batch(&db, &mut buffer, budget_mb).await {
+                                        log::error!(
+                                            "Flush worker stopping with {} unsaved readings: {}",
+                                            buffer.len(),
+                                            e
+                                        );
+                                    }
+                                }
+                                log::info!("Flush worker stopped (channel closed)");
+                                return;
                             }
-                            log::info!("Flush worker stopped (channel closed)");
-                            return;
                         }
                     }
-                }
-                _ = &mut deadline => {
-                    break;
+                    _ = &mut deadline => {
+                        break;
+                    }
                 }
             }
+        } else {
+            // Buffer full: stop receiving so acquisition pauses, retry the write.
+            deadline.await;
         }
 
-        if !buffer.is_empty() {
-            flush_batch(&db, &mut buffer).await;
+        if buffer.is_empty() {
+            continue;
+        }
+
+        match flush_batch(&db, &mut buffer, budget_mb).await {
+            Ok(_) => {
+                if let Some(start) = paused_since.take() {
+                    let end = chrono::Utc::now().timestamp_millis();
+                    log::warn!(
+                        "Acquisition resumed after {:.1}s pause",
+                        (end - start) as f64 / 1000.0
+                    );
+                    let db = db.clone();
+                    let _ = tokio::task::spawn_blocking(move || {
+                        db.record_acquisition_gap(start, end, "buffer write failing")
+                    })
+                    .await;
+                }
+            }
+            Err(e) => {
+                if buffer.len() >= MAX_PENDING && paused_since.is_none() {
+                    paused_since = Some(chrono::Utc::now().timestamp_millis());
+                    log::error!(
+                        "ALARM: readings cannot be saved ({e}); {} held in memory, acquisition PAUSED",
+                        buffer.len()
+                    );
+                } else if last_warn.is_none_or(|t| t.elapsed() >= Duration::from_secs(10)) {
+                    last_warn = Some(std::time::Instant::now());
+                    log::warn!(
+                        "Readings not saved yet ({e}); keeping {} in memory and retrying",
+                        buffer.len()
+                    );
+                }
+            }
         }
     }
 }
 
-async fn flush_batch(db: &Arc<DbPool>, buffer: &mut Vec<TelemetryRecord>) {
-    let batch = std::mem::take(buffer);
-    let count = batch.len();
-    let db = db.clone();
+/// Write the buffer to SQLite. On success the buffer is empty; on any error it
+/// is left untouched so the readings are retried, never dropped.
+async fn flush_batch(
+    db: &Arc<DbPool>,
+    buffer: &mut Vec<TelemetryRecord>,
+    budget_mb: f64,
+) -> Result<usize, String> {
+    if budget_mb > 0.0 {
+        let db_check = db.clone();
+        let used = tokio::task::spawn_blocking(move || db_check.used_mb())
+            .await
+            .map_err(|e| format!("spawn_blocking: {e}"))?
+            .map_err(|e| format!("disk usage check failed: {e}"))?;
+        if used > budget_mb {
+            return Err(format!(
+                "disk budget reached ({used:.0} MB used, budget {budget_mb:.0} MB)"
+            ));
+        }
+    }
 
+    // A copy goes to the blocking thread so the buffer survives even a panic there.
+    let batch = buffer.clone();
+    let db = db.clone();
     let result = tokio::task::spawn_blocking(move || db.insert_telemetry_batch(&batch)).await;
 
     match result {
-        Ok(Ok(_)) => {
-            log::trace!("Flushed {} records to SQLite", count);
+        Ok(Ok(outcome)) => {
+            buffer.clear();
+            if outcome.non_finite > 0 || outcome.unknown_tag > 0 {
+                log::warn!(
+                    "Moved to dead_letter: {} non-finite, {} unknown tag_id",
+                    outcome.non_finite,
+                    outcome.unknown_tag
+                );
+            }
+            log::trace!("Flushed {} records to SQLite", outcome.inserted);
+            Ok(outcome.inserted)
         }
-        Ok(Err(e)) => {
-            log::error!("SQLite batch insert failed: {}", e);
-        }
-        Err(e) => {
-            log::error!("spawn_blocking panicked during flush: {}", e);
-        }
+        Ok(Err(e)) => Err(format!("SQLite insert failed: {e}")),
+        Err(e) => Err(format!("flush task failed: {e}")),
     }
 }
 

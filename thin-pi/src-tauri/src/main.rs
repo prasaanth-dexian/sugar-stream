@@ -60,9 +60,17 @@ async fn apply_license_key(
     let mut lic = state.license.lock();
     *lic = status.clone();
 
-    // Save license to disk for persistence across restarts
-    let db_path = format!("{}/../thinpi_license.key", state.db.get_db_path());
-    let _ = std::fs::write(&db_path, license_str.trim());
+    // Save next to the database, which is where startup looks for it. (The old
+    // "<db file>/../" path treated the database file as a directory and the
+    // write failed silently on Linux, so the tier reset on every restart.)
+    let key_path = std::path::Path::new(state.db.get_db_path()).with_file_name(LICENSE_FILE);
+    if let Err(e) = std::fs::write(&key_path, license_str.trim()) {
+        log::error!(
+            "License activated but could not be saved to {}: {}",
+            key_path.display(),
+            e
+        );
+    }
 
     log::info!(
         "License activated: tier={}, licensee={}, max_tags={}",
@@ -83,12 +91,22 @@ async fn connect_opc_server(
     app_handle: tauri::AppHandle,
     endpoint_url: String,
 ) -> Result<bool, String> {
+    connect_source(&state, &app_handle, &endpoint_url)?;
+    Ok(true)
+}
+
+/// Connect to an OPC server (or the simulator), start the flush worker once and
+/// the sync worker if licensed. Shared by the UI command and headless autostart.
+fn connect_source(
+    state: &AppState,
+    app_handle: &tauri::AppHandle,
+    endpoint_url: &str,
+) -> Result<(), String> {
     let db = state.db.clone();
 
-    // Connect to OPC UA or start simulation
     {
         let opc = state.opc.lock();
-        opc.connect(&endpoint_url, db.clone())?;
+        opc.connect(endpoint_url, db.clone())?;
     }
 
     // Take the receiver and start the flush worker (only once)
@@ -101,14 +119,9 @@ async fn connect_opc_server(
         log::info!("Flush worker spawned");
     }
 
-    // Start sync worker if licensed for cloud sync
-    let cloud_sync_enabled = {
-        let lic = state.license.lock();
-        lic.cloud_sync
-    };
-
+    let cloud_sync_enabled = state.license.lock().cloud_sync;
     if cloud_sync_enabled {
-        start_sync_if_needed(&state, &app_handle);
+        start_sync_if_needed(state, app_handle);
     }
 
     log::info!(
@@ -116,11 +129,10 @@ async fn connect_opc_server(
         if endpoint_url.is_empty() {
             "simulator"
         } else {
-            &endpoint_url
+            endpoint_url
         }
     );
-
-    Ok(true)
+    Ok(())
 }
 
 /// Browse available OPC tags (returns hierarchical tree).
@@ -301,13 +313,58 @@ fn start_sync_if_needed(state: &AppState, app_handle: &tauri::AppHandle) {
 
     let db = state.db.clone();
     let handle = app_handle.clone();
-    let config = SyncConfig::default();
+    let config = SyncConfig::from_env(&default_collector_id());
 
     tauri::async_runtime::spawn(async move {
         sync_worker::start_sync_worker(db, config, handle, shutdown_rx).await;
     });
 
     log::info!("Sync worker started (cloud sync enabled)");
+}
+
+const LICENSE_FILE: &str = "thinpi_license.key";
+
+/// Collector id used when `THINPI_COLLECTOR_ID` is not set: derived from the
+/// hardware fingerprint, so it is stable across restarts on the same machine.
+fn default_collector_id() -> String {
+    match get_hardware_id() {
+        Ok(hwid) => format!("thinpi-{}", &hwid[..hwid.len().min(12)]),
+        Err(_) => "thinpi-unknown".into(),
+    }
+}
+
+/// Debug builds only: `THINPI_DEV_LICENSE=1` activates the same development
+/// license the "Generate Dev Key" button produces, for headless test runs.
+#[cfg(debug_assertions)]
+fn maybe_dev_license(current: LicenseStatus, key_path: &std::path::Path) -> LicenseStatus {
+    if current.cloud_sync || std::env::var("THINPI_DEV_LICENSE").as_deref() != Ok("1") {
+        return current;
+    }
+    let key = match get_hardware_id().and_then(|h| license::generate_dev_license(&h)) {
+        Ok(k) => k,
+        Err(e) => {
+            log::warn!("THINPI_DEV_LICENSE: could not generate key: {e}");
+            return current;
+        }
+    };
+    match verify_license(&key) {
+        Ok(status) => {
+            if let Err(e) = std::fs::write(key_path, key.trim()) {
+                log::warn!("THINPI_DEV_LICENSE: could not save key: {e}");
+            }
+            log::warn!("THINPI_DEV_LICENSE: development license activated");
+            status
+        }
+        Err(e) => {
+            log::warn!("THINPI_DEV_LICENSE: generated key invalid: {e}");
+            current
+        }
+    }
+}
+
+#[cfg(not(debug_assertions))]
+fn maybe_dev_license(current: LicenseStatus, _key_path: &std::path::Path) -> LicenseStatus {
+    current
 }
 
 // ── Main Entry Point ──────────────────────────────────────────────────────────
@@ -339,7 +396,7 @@ fn main() {
             );
 
             // Load saved license or default to Community
-            let license_path = app_data_dir.join("thinpi_license.key");
+            let license_path = app_data_dir.join(LICENSE_FILE);
             let license = if license_path.exists() {
                 match std::fs::read_to_string(&license_path) {
                     Ok(key) => verify_license(&key).unwrap_or_else(|e| {
@@ -351,6 +408,7 @@ fn main() {
             } else {
                 get_community_license()
             };
+            let license = maybe_dev_license(license, &license_path);
 
             log::info!("License tier: {} ({})", license.tier, license.licensee);
 
@@ -368,6 +426,28 @@ fn main() {
             });
 
             log::info!("THIN PI System initialized — DB: {}", db_path.display());
+
+            let state = app.state::<AppState>();
+            // Deliver any backlog right away after a restart or power cut, without
+            // waiting for someone to reconnect in the UI.
+            if state.license.lock().cloud_sync {
+                start_sync_if_needed(&state, app.handle());
+            }
+            // Headless start (Windows service, test rigs): THINPI_AUTOSTART is
+            // "simulator" or an OPC endpoint URL.
+            if let Ok(target) = std::env::var("THINPI_AUTOSTART") {
+                let target = target.trim();
+                if !target.is_empty() {
+                    let endpoint = if target.eq_ignore_ascii_case("simulator") {
+                        ""
+                    } else {
+                        target
+                    };
+                    if let Err(e) = connect_source(&state, app.handle(), endpoint) {
+                        log::error!("THINPI_AUTOSTART={target} failed: {e}");
+                    }
+                }
+            }
 
             Ok(())
         })

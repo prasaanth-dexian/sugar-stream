@@ -113,3 +113,23 @@ jobs:
 
       - name: Build
         run: cargo build --release
+
+  gateway:
+    name: Edge ingest gateway (Python)
+    # The gateway runs on the Linux edge host, so a Linux runner is enough. It
+    # uses the runner's preinstalled Python rather than a setup action (see the
+    # ASF allowlist note above).
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: thin-pi/edge-gateway
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7.0.1
+
+      - name: Tests
+        run: |
+          python3 --version
+          python3 -m venv .venv
+          .venv/bin/pip install -r requirements-dev.txt
+          .venv/bin/python -m pytest

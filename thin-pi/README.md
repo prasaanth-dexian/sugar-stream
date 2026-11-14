@@ -58,9 +58,10 @@ graph TD
 - **Built-in Offline Simulator**: 5 realistic industrial telemetry profiles (Temperature, Pressure, Flow Rate, Motor Speed, Vibration) at 250ms sampling for isolated plant testing.
 
 ### 2. Embedded High-Throughput SQLite Database
-- **WAL Mode (Write-Ahead Logging)** with `PRAGMA synchronous = NORMAL`, `temp_store = MEMORY`, 64MB cache, and 256MB memory-mapped I/O.
+- **WAL Mode (Write-Ahead Logging)** with `PRAGMA synchronous = FULL` (every committed batch survives a power cut), `temp_store = MEMORY`, 64MB cache, and 256MB memory-mapped I/O.
 - **Dual-Connection Pool**: Dedicated Writer connection for batch telemetry flushes and dedicated Reader connection for UI/IPC queries — completely eliminating mutex contention and database lock timeouts.
-- **Crash & Power-Drop Resilient**: Guaranteed data integrity during sudden plant PC power cuts.
+- **Never drops a reading**: if a flush fails (disk full, I/O error) the readings stay in memory and are retried. Readings that can never be stored (NaN/infinite value, unknown tag) go to a `dead_letter` table with the reason. At the disk budget (`THINPI_DISK_BUDGET_MB`, default 20480) writes stop with a warning; if the in-memory buffer fills, acquisition pauses and the gap is recorded in `acq_gaps`.
+- **Stable delivery ids**: every reading gets a `seq` that is never reused, plus a per-database `epoch`. Older databases are migrated once at startup.
 
 ### 3. 60 FPS Canvas Trend Engine with LTTB Downsampling
 - **uPlot High-Speed Visualizer**: Canvas-based time-series rendering capable of displaying 100,000+ data points across multiple active pens with pan, box zoom, and crosshairs.
@@ -75,8 +76,11 @@ graph TD
 
 ### 5. Store-and-Forward Async Cloud Worker
 - **Offline Buffering**: Telemetry records accumulate safely in SQLite during plant network dropouts.
+- **Confirmed delivery**: rows are marked synced only after the edge gateway (`edge-gateway/`) confirms it stored all of them; anything else is retried. Resends are harmless (the gateway is idempotent).
+- **Live first**: a live sender (last 10 s, every 250 ms) and a backfill sender (oldest first, parallel batches) run independently, so a backlog after an outage never delays live data. Backfill starts draining as soon as the gateway is reachable again.
 - **Gzip Compression**: Compresses batches before uploading via HTTPS POST to reduce factory bandwidth.
-- **Auto-Pruning & Vacuum**: Automatically prunes synced records older than 30 days every 6 hours and executes `PRAGMA incremental_vacuum` to keep disk footprint minimal.
+- **Retention**: delivered readings are kept for `THINPI_RETAIN_SYNCED_HOURS` (default 72) so the edge can be re-filled, then pruned in chunks every hour.
+- **Configuration** (environment): `THINPI_SYNC_URL`, `THINPI_SYNC_API_KEY`, `THINPI_COLLECTOR_ID`, `THINPI_BACKFILL_BATCH`, `THINPI_BACKFILL_PARALLEL`, `THINPI_AUTOSTART` (`simulator` or an OPC endpoint, for headless/service starts). Delivery starts at launch when licensed, so a backlog is sent after a reboot without user action.
 
 ---
 

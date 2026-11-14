@@ -90,11 +90,20 @@ pub struct LicensePayload {
 // ── Sync Worker Row ───────────────────────────────────────────────────────────
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SyncBatchRow {
-    pub rowid: i64,
+    /// Delivery identity, never reused (see `db::TELEMETRY_TABLE`).
+    pub seq: i64,
     pub timestamp: i64,
     pub tag_id: i64,
     pub value: f64,
     pub quality: i32,
+}
+
+// ── Tag metadata sent with each sync batch ────────────────────────────────────
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct TagMeta {
+    pub node_id: String,
+    pub tag_name: String,
+    pub eng_unit: String,
 }
 
 // ── Sync Status Event (emitted to frontend) ──────────────────────────────────
